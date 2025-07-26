@@ -64,39 +64,70 @@ public class AuthController {
         try (Connection conn = DBConnection.getConnection()) {
             conn.setAutoCommit(false);
 
-            // Insert course if not exists
-            String insertCourse = "INSERT IGNORE INTO courses (course_code, course_name) VALUES (?, ?)";
-            try (PreparedStatement ps = conn.prepareStatement(insertCourse)) {
-                ps.setString(1, courseCode);
-                ps.setString(2, courseName);
-                ps.executeUpdate();
-            }
-
-            // Get course ID
             int courseId = -1;
-            try (PreparedStatement ps = conn.prepareStatement("SELECT id FROM courses WHERE course_code = ?")) {
-                ps.setString(1, courseCode);
-                ResultSet rs = ps.executeQuery();
-                if (rs.next()) {
-                    courseId = rs.getInt("id");
-                }
-            }
 
-            if (courseId == -1) throw new SQLException("Course not found.");
+            if ("teacher".equals(role)) {
+                // Teacher can create course if not exists
+                String insertCourse = "INSERT IGNORE INTO courses (course_code, course_name) VALUES (?, ?)";
+                try (PreparedStatement ps = conn.prepareStatement(insertCourse)) {
+                    ps.setString(1, courseCode);
+                    ps.setString(2, courseName);
+                    ps.executeUpdate();
+                }
+
+                try (PreparedStatement ps = conn.prepareStatement("SELECT id FROM courses WHERE course_code = ?")) {
+                    ps.setString(1, courseCode);
+                    ResultSet rs = ps.executeQuery();
+                    if (rs.next()) {
+                        courseId = rs.getInt("id");
+                    }
+                }
+
+                if (courseId == -1) {
+                    JOptionPane.showMessageDialog(frame, "Course creation failed.");
+                    return;
+                }
+
+            } else if ("student".equals(role)) {
+                // Student registration only if course exists
+                try (PreparedStatement ps = conn.prepareStatement("SELECT id FROM courses WHERE course_code = ?")) {
+                    ps.setString(1, courseCode);
+                    ResultSet rs = ps.executeQuery();
+                    if (rs.next()) {
+                        courseId = rs.getInt("id");
+                    } else {
+                        JOptionPane.showMessageDialog(frame, "Course does not exist. Please contact your teacher.");
+                        return;
+                    }
+                }
+
+                // Check if course has teacher assigned
+                String teacherCheck = "SELECT * FROM teacher_courses WHERE course_id = ?";
+                try (PreparedStatement ps = conn.prepareStatement(teacherCheck)) {
+                    ps.setInt(1, courseId);
+                    ResultSet rs = ps.executeQuery();
+                    if (!rs.next()) {
+                        JOptionPane.showMessageDialog(frame, "No teacher assigned to this course yet. Please try again later.");
+                        return;
+                    }
+                }
+            } else {
+                JOptionPane.showMessageDialog(frame, "Invalid role selected.");
+                return;
+            }
 
             int userId = -1;
-
-            // Check if user already exists
+            // Check if user exists
             String checkUserSQL = "SELECT id FROM users WHERE email = ?";
             try (PreparedStatement ps = conn.prepareStatement(checkUserSQL)) {
                 ps.setString(1, email);
                 ResultSet rs = ps.executeQuery();
                 if (rs.next()) {
-                    userId = rs.getInt("id"); // Existing user
+                    userId = rs.getInt("id");
                 }
             }
 
-            // Insert new user if not exists
+            // Insert user if not exists
             if (userId == -1) {
                 String insertUser = "INSERT INTO users (name, email, password, role, student_id) VALUES (?, ?, ?, ?, ?)";
                 try (PreparedStatement ps = conn.prepareStatement(insertUser, Statement.RETURN_GENERATED_KEYS)) {
@@ -104,7 +135,7 @@ public class AuthController {
                     ps.setString(2, email);
                     ps.setString(3, PasswordUtil.hashPassword(password));
                     ps.setString(4, role);
-                    ps.setString(5, role.equals("student") ? studentId : null);
+                    ps.setString(5, "student".equals(role) ? studentId : null);
                     ps.executeUpdate();
 
                     ResultSet generatedKeys = ps.getGeneratedKeys();
@@ -114,11 +145,10 @@ public class AuthController {
                 }
             }
 
-            // Enroll into course (ignore if already enrolled)
-            String enrollSQL = role.equals("student")
+            // Enroll user in course
+            String enrollSQL = "student".equals(role)
                     ? "INSERT IGNORE INTO student_courses (student_id, course_id) VALUES (?, ?)"
                     : "INSERT IGNORE INTO teacher_courses (teacher_id, course_id) VALUES (?, ?)";
-
             try (PreparedStatement psEnroll = conn.prepareStatement(enrollSQL)) {
                 psEnroll.setInt(1, userId);
                 psEnroll.setInt(2, courseId);
